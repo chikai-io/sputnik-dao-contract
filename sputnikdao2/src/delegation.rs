@@ -1,7 +1,9 @@
 use crate::*;
 
+pub type Weight = u128;
+
 impl Contract {
-    pub fn get_user_weight(&self, account_id: &AccountId) -> Balance {
+    pub fn get_user_weight(&self, account_id: &AccountId) -> Weight {
         self.delegations.get(account_id).unwrap_or_default()
     }
 }

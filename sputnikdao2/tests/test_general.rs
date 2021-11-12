@@ -6,8 +6,8 @@ use near_sdk_sim::{call, to_yocto, view};
 
 use sputnik_staking::User;
 use sputnikdao2::{
-    Action, Policy, Proposal, ProposalInput, ProposalKind, ProposalStatus, RoleKind,
-    RolePermission, VersionedPolicy, VotePolicy,
+    Action, DecisionPolicy, Membership, Policy, Proposal, ProposalInput, ProposalKind,
+    ProposalStatus, RolePermission, VersionedPolicy,
 };
 
 use crate::utils::*;
@@ -28,24 +28,26 @@ fn test_multi_council() {
         roles: vec![
             RolePermission {
                 name: "all".to_string(),
-                kind: RoleKind::Everyone,
+                membership: Membership::Everyone,
                 permissions: vec!["*:AddProposal".to_string()].into_iter().collect(),
-                vote_policy: HashMap::default(),
+                decision_policy: HashMap::default(),
             },
             RolePermission {
                 name: "council".to_string(),
-                kind: RoleKind::Group(vec![user(1), user(2)].into_iter().collect()),
+                membership: Membership::Group(vec![user(1), user(2)].into_iter().collect()),
                 permissions: vec!["*:*".to_string()].into_iter().collect(),
-                vote_policy: HashMap::default(),
+                decision_policy: HashMap::default(),
             },
             RolePermission {
                 name: "community".to_string(),
-                kind: RoleKind::Group(vec![user(1), user(3), user(4)].into_iter().collect()),
+                membership: Membership::Group(
+                    vec![user(1), user(3), user(4)].into_iter().collect(),
+                ),
                 permissions: vec!["*:*".to_string()].into_iter().collect(),
-                vote_policy: HashMap::default(),
+                decision_policy: HashMap::default(),
             },
         ],
-        default_vote_policy: VotePolicy::default(),
+        default_decision_policy: DecisionPolicy::default(),
         proposal_bond: U128(10u128.pow(24)),
         proposal_period: WrappedDuration::from(1_000_000_000 * 60 * 60 * 24 * 7),
         bounty_bond: U128(10u128.pow(24)),
@@ -100,8 +102,8 @@ fn test_create_dao_and_use_token() {
     let policy = view!(dao.get_policy()).unwrap_json::<Policy>();
     assert_eq!(policy.roles.len(), 2);
     assert_eq!(
-        policy.roles[1].kind,
-        RoleKind::Group(
+        policy.roles[1].membership,
+        Membership::Group(
             vec![
                 root.account_id.clone(),
                 user2.account_id.clone(),

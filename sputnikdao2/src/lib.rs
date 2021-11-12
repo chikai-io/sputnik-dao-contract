@@ -9,7 +9,10 @@ use near_sdk::{
 };
 
 use crate::bounties::{Bounty, BountyClaim, VersionedBounty};
-pub use crate::policy::{Policy, RoleKind, RolePermission, VersionedPolicy, VotePolicy};
+pub use crate::delegation::Weight;
+pub use crate::policy::{
+    DecisionPolicy, Membership, Policy, RolePermission, VersionedPolicy, WeightKind, WeightOrRatio,
+};
 use crate::proposals::VersionedProposal;
 pub use crate::proposals::{Proposal, ProposalInput, ProposalKind, ProposalStatus};
 pub use crate::types::{Action, Config};
@@ -52,10 +55,10 @@ pub struct Contract {
 
     /// Vote staking contract id. That contract must have this account as owner.
     pub staking_id: Option<AccountId>,
-    /// Delegated  token total amount.
-    pub total_delegation_amount: Balance,
+    /// Delegated token total amount.
+    pub total_delegation_amount: Weight,
     /// Delegations per user.
-    pub delegations: LookupMap<AccountId, Balance>,
+    pub delegations: LookupMap<AccountId, Weight>,
 
     /// Last available id for the proposals.
     pub last_proposal_id: u64,

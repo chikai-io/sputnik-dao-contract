@@ -15,7 +15,7 @@ fn user(id: u32) -> String {
 #[test]
 fn test_quitting_the_dao() {
     use near_sdk_sim::UserAccount;
-    use sputnikdao2::{Policy, RoleKind, RolePermission};
+    use sputnikdao2::{Membership, Policy, RolePermission};
     use std::collections::HashSet;
 
     let (root, dao) = setup_dao();
@@ -25,9 +25,9 @@ fn test_quitting_the_dao() {
 
     let new_role = |name: String| RolePermission {
         name,
-        kind: RoleKind::Group(HashSet::new()),
+        membership: Membership::Group(HashSet::new()),
         permissions: HashSet::new(),
-        vote_policy: HashMap::new(),
+        decision_policy: HashMap::new(),
     };
     let role_none = new_role("has_nobody".to_string());
     let role_2 = new_role("has_2".to_string());
@@ -77,7 +77,7 @@ fn test_quitting_the_dao() {
     add_to_roles(&user4, vec!["has_234"]);
 
     let role_members = |role_permission: &sputnikdao2::RolePermission| -> Vec<String> {
-        if let RoleKind::Group(ref members) = role_permission.kind {
+        if let Membership::Group(ref members) = role_permission.membership {
             let mut members = members.into_iter().cloned().collect::<Vec<_>>();
             members.sort();
             members

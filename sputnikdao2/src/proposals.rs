@@ -150,7 +150,7 @@ pub struct Proposal {
     pub kind: ProposalKind,
     /// Current status of the proposal.
     pub status: ProposalStatus,
-    /// Count of votes per role per decision: yes / no / spam.
+    /// Count of votes per role_name per decision: yes / no / spam.
     pub vote_counts: HashMap<String, [Balance; 3]>,
     /// Map of who voted and how.
     pub votes: HashMap<AccountId, Vote>,
@@ -178,20 +178,21 @@ impl Proposal {
     pub fn update_votes(
         &mut self,
         account_id: &AccountId,
-        roles: &[String],
+        role_names: &[String],
         vote: Vote,
         policy: &Policy,
-        user_weight: Balance,
+        user_weight: Weight,
     ) {
-        for role in roles {
-            let amount = if policy.is_token_weighted(role, &self.kind.to_policy_label().to_string())
-            {
-                user_weight
-            } else {
-                1
-            };
-            self.vote_counts.entry(role.clone()).or_insert([0u128; 3])[vote.clone() as usize] +=
-                amount;
+        for role_name in role_names {
+            let amount =
+                if policy.is_token_weighted(role_name, &self.kind.to_policy_label().to_string()) {
+                    user_weight
+                } else {
+                    1
+                };
+            self.vote_counts
+                .entry(role_name.clone())
+                .or_insert([0u128; 3])[vote.clone() as usize] += amount;
         }
         assert!(
             self.votes.insert(account_id.clone(), vote).is_none(),
@@ -432,7 +433,7 @@ impl Contract {
             "ERR_PERMISSION_DENIED"
         );
 
-        // 3. Actually executes or adds proposal to the current list of proposals.
+        // 3. Actually add proposal to the current list of proposals.
         let id = self.last_proposal_id;
         self.proposals
             .insert(&id, &VersionedProposal::Default(proposal.into()));
@@ -446,7 +447,7 @@ impl Contract {
         let mut proposal: Proposal = self.proposals.get(&id).expect("ERR_NO_PROPOSAL").into();
         let policy = self.policy.get().unwrap().to_policy();
         // Check permissions for the given action.
-        let (roles, allowed) =
+        let (role_names, allowed) =
             policy.can_execute_action(self.internal_user_info(), &proposal.kind, &action);
         assert!(allowed, "ERR_PERMISSION_DENIED");
         let sender_id = env::predecessor_account_id();
@@ -465,14 +466,14 @@ impl Contract {
                 );
                 proposal.update_votes(
                     &sender_id,
-                    &roles,
+                    &role_names,
                     Vote::from(action),
                     &policy,
                     self.get_user_weight(&sender_id),
                 );
                 // Updates proposal status with new votes using the policy.
                 proposal.status =
-                    policy.proposal_status(&proposal, roles, self.total_delegation_amount);
+                    policy.proposal_status(&proposal, role_names, self.total_delegation_amount);
                 if proposal.status == ProposalStatus::Approved {
                     self.internal_execute_proposal(&policy, &proposal);
                     true
