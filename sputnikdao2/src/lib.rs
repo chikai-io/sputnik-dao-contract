@@ -46,8 +46,14 @@ pub struct Contract {
     /// Voting and permissions policy.
     pub policy: LazyOption<VersionedPolicy>,
 
-    /// List of roles and permissions for them in the current policy.
+    /// List of roles and permissions for them.
     pub roles: Vec<RolePermission>,
+    /// List of in-progress proposals that each role is
+    /// accounting for.
+    ///
+    /// The list of `ProposalIds` must be ordered.
+    // TODO: consider using balanced tree (check gas usage, and also helps
+    // preventing mistakes).
     pub role_votes: LookupMap<NewRoleName, Vec<ProposalId>>,
 
     /// Amount of $NEAR locked for storage / bonds.
@@ -82,11 +88,18 @@ pub struct Contract {
 impl Contract {
     #[init]
     pub fn new(config: Config, policy: VersionedPolicy, default_council: Vec<AccountId>) -> Self {
+        let roles = roles::default_roles(default_council);
+        let mut role_votes = LookupMap::new(StorageKeys::RoleVotes);
+        for role in roles.iter().map(|role| role.name.clone()) {
+            if let Some(_prev) = role_votes.insert(&role, &vec![]) {
+                env::panic_str("ERR_ROLE_VOTES_REPEATED_KEY")
+            }
+        }
         Self {
             config: LazyOption::new(StorageKeys::Config, Some(&config)),
             policy: LazyOption::new(StorageKeys::Policy, Some(&policy.upgrade())),
-            roles: roles::default_roles(default_council),
-            role_votes: LookupMap::new(StorageKeys::RoleVotes),
+            roles,
+            role_votes,
             staking_id: None,
             total_delegation_amount: 0,
             delegations: LookupMap::new(StorageKeys::Delegations),

@@ -31,8 +31,8 @@ pub enum ProposalStatus {
 }
 
 /// Function call arguments.
-#[derive(BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
-#[cfg_attr(not(target_arch = "wasm32"), derive(Clone, Debug))]
+#[derive(BorshSerialize, BorshDeserialize, Serialize, Deserialize, Clone)]
+#[cfg_attr(not(target_arch = "wasm32"), derive(Debug))]
 #[serde(crate = "near_sdk::serde")]
 pub struct ActionCall {
     method_name: String,
@@ -42,8 +42,8 @@ pub struct ActionCall {
 }
 
 /// Kinds of proposals, doing different action.
-#[derive(BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
-#[cfg_attr(not(target_arch = "wasm32"), derive(Clone, Debug))]
+#[derive(BorshSerialize, BorshDeserialize, Serialize, Deserialize, Clone)]
+#[cfg_attr(not(target_arch = "wasm32"), derive(Debug))]
 #[serde(crate = "near_sdk::serde")]
 pub enum ProposalKind {
     /// Change the DAO config.
@@ -201,7 +201,7 @@ impl From<VersionedProposal> for Proposal {
 
 impl Proposal {}
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(crate = "near_sdk::serde")]
 pub struct ProposalInput {
     /// Description of this proposal.
@@ -292,14 +292,14 @@ impl Contract {
                 PromiseOrValue::Value(())
             }
             ProposalKind::AddMemberToRole { member_id, role } => {
-                self.add_member_to_role(role, &member_id.clone().into());
+                self.add_member_to_role(role, &member_id.clone());
                 // let mut new_policy = policy.clone();
                 // new_policy.add_member_to_role(role, &member_id.clone().into());
                 // self.policy.set(&VersionedPolicy::Current(new_policy));
                 PromiseOrValue::Value(())
             }
             ProposalKind::RemoveMemberFromRole { member_id, role } => {
-                self.remove_member_from_role(role, &member_id.clone().into());
+                self.remove_member_from_role(role, &member_id.clone());
                 // let mut new_policy = policy.clone();
                 // new_policy.remove_member_from_role_name(role, &member_id.clone().into());
                 // self.policy.set(&VersionedPolicy::Current(new_policy));
@@ -309,10 +309,10 @@ impl Contract {
                 receiver_id,
                 actions,
             } => {
-                let mut promise = Promise::new(receiver_id.clone().into());
+                let mut promise = Promise::new(receiver_id.clone());
                 for action in actions {
                     promise = promise.function_call(
-                        action.method_name.clone().into(),
+                        action.method_name.clone(),
                         action.args.clone().into(),
                         action.deposit.0,
                         Gas(action.gas.0),
@@ -321,7 +321,7 @@ impl Contract {
                 promise.into()
             }
             ProposalKind::UpgradeSelf { hash } => {
-                upgrade_self(&CryptoHash::from(hash.clone()));
+                upgrade_self(&CryptoHash::from(*hash));
                 PromiseOrValue::Value(())
             }
             ProposalKind::UpgradeRemote {
@@ -329,11 +329,7 @@ impl Contract {
                 method_name,
                 hash,
             } => {
-                upgrade_remote(
-                    &receiver_id.clone().into(),
-                    method_name,
-                    &CryptoHash::from(hash.clone()),
-                );
+                upgrade_remote(&receiver_id.clone(), method_name, &CryptoHash::from(*hash));
                 PromiseOrValue::Value(())
             }
             ProposalKind::Transfer {
@@ -342,15 +338,15 @@ impl Contract {
                 amount,
                 msg,
             } => self.internal_payout(
-                &token_id,
-                &receiver_id.clone().into(),
+                token_id,
+                &receiver_id.clone(),
                 amount.0,
                 proposal.description.clone(),
                 msg.clone(),
             ),
             ProposalKind::SetStakingContract { staking_id } => {
                 assert!(self.staking_id.is_none(), "ERR_INVALID_STAKING_CHANGE");
-                self.staking_id = Some(staking_id.clone().into());
+                self.staking_id = Some(staking_id.clone());
                 PromiseOrValue::Value(())
             }
             ProposalKind::AddBounty { bounty } => {
@@ -360,7 +356,7 @@ impl Contract {
             ProposalKind::BountyDone {
                 bounty_id,
                 receiver_id,
-            } => self.internal_execute_bounty_payout(*bounty_id, &receiver_id.clone().into(), true),
+            } => self.internal_execute_bounty_payout(*bounty_id, &receiver_id.clone(), true),
             ProposalKind::Vote => PromiseOrValue::Value(()),
         }
     }
@@ -380,9 +376,7 @@ impl Contract {
             ProposalKind::BountyDone {
                 bounty_id,
                 receiver_id,
-            } => {
-                self.internal_execute_bounty_payout(*bounty_id, &receiver_id.clone().into(), false)
-            }
+            } => self.internal_execute_bounty_payout(*bounty_id, &receiver_id.clone(), false),
             _ => PromiseOrValue::Value(()),
         }
     }
@@ -492,22 +486,18 @@ impl Contract {
             .1,
             "ERR_PERMISSION_DENIED"
         );
-        // assert!(
-        //     policy
-        //         .can_execute_action(
-        //             self.internal_user_info(),
-        //             &proposal.kind,
-        //             &Action::AddProposal
-        //         )
-        //         .1,
-        //     "ERR_PERMISSION_DENIED"
-        // );
 
         // 3. Actually add proposal to the current list of proposals.
         let id = self.last_proposal_id;
         self.proposals
-            .insert(&id, &VersionedProposal::Default(proposal.into()));
+            .insert(&id, &VersionedProposal::Default(proposal.clone().into()));
         self.last_proposal_id += 1;
+
+        // 4. For this new in-progress proposal,
+        // adds a relationship from the roles that can decide it's
+        // state
+        self.add_proposal_relation(&proposal.kind, id);
+
         id
     }
 
@@ -528,10 +518,12 @@ impl Contract {
         }
         let sender_id = env::predecessor_account_id();
         // Update proposal given action. Returns true if should be updated in storage.
-        let update = match action {
+        let update_proposal = match action {
             Action::AddProposal => env::panic_str("ERR_WRONG_ACTION"),
             Action::RemoveProposal => {
                 self.proposals.remove(&id);
+                // proposal no longer in-progress
+                self.remove_proposal_relation(&proposal.kind, &action, id);
                 false
             }
             Action::VoteApprove | Action::VoteReject | Action::VoteRemove => {
@@ -544,7 +536,7 @@ impl Contract {
                     &mut proposal,
                     &sender_id,
                     &roles,
-                    Vote::from(action),
+                    Vote::from(action.clone()),
                     &policy,
                     self.get_user_weight(&sender_id),
                 );
@@ -553,16 +545,23 @@ impl Contract {
                     self.proposal_status(&proposal, &policy, roles, self.total_delegation_amount);
                 match proposal.status {
                     ProposalStatus::Approved => {
+                        // proposal no longer in-progress
+                        self.remove_proposal_relation(&proposal.kind, &action, id);
+
                         self.internal_execute_proposal(&policy, &proposal);
                         true
                     }
                     ProposalStatus::Rejected => {
                         self.internal_reject_proposal(&policy, &proposal, true);
+                        // proposal no longer in-progress
+                        self.remove_proposal_relation(&proposal.kind, &action, id);
                         true
                     }
                     ProposalStatus::Removed => {
                         self.internal_reject_proposal(&policy, &proposal, false);
                         self.proposals.remove(&id);
+                        // proposal no longer in-progress
+                        self.remove_proposal_relation(&proposal.kind, &action, id);
                         false
                     }
                     _ => {
@@ -583,19 +582,27 @@ impl Contract {
                     ProposalStatus::InProgress => false,
                     ProposalStatus::Approved => {
                         self.internal_execute_proposal(&policy, &proposal);
+                        // proposal no longer in-progress
+                        self.remove_proposal_relation(&proposal.kind, &action, id);
                         true
                     }
                     ProposalStatus::Rejected => {
                         self.internal_reject_proposal(&policy, &proposal, true);
+                        // proposal no longer in-progress
+                        self.remove_proposal_relation(&proposal.kind, &action, id);
                         true
                     }
                     ProposalStatus::Removed => {
                         self.internal_reject_proposal(&policy, &proposal, false);
                         self.proposals.remove(&id);
+                        // proposal no longer in-progress
+                        self.remove_proposal_relation(&proposal.kind, &action, id);
                         false
                     }
                     ProposalStatus::Expired => {
                         self.internal_reject_proposal(&policy, &proposal, true);
+                        // proposal no longer in-progress
+                        self.remove_proposal_relation(&proposal.kind, &action, id);
                         true
                     }
                     ProposalStatus::Moved => {
@@ -606,7 +613,7 @@ impl Contract {
             }
             Action::MoveToHub => false,
         };
-        if update {
+        if update_proposal {
             self.proposals
                 .insert(&id, &VersionedProposal::Default(proposal));
         }

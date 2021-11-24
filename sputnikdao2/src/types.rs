@@ -41,7 +41,7 @@ impl Config {
 
 /// Set of possible actions that a user may be allowed to take on
 /// proposals.
-#[derive(BorshSerialize, BorshDeserialize, Serialize, Deserialize, Debug)]
+#[derive(BorshSerialize, BorshDeserialize, Serialize, Deserialize, Debug, Clone)]
 #[serde(crate = "near_sdk::serde")]
 pub enum Action {
     /// Action to add proposal. Used internally.

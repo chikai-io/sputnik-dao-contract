@@ -321,16 +321,10 @@ fn test_quit_removes_votes2() {
 
     // user2 tries to finalize t1
     let res = call!(user2, dao.act_proposal(t1, Action::Finalize, None));
-    should_fail_with(res, 0, "ERR_FINALIZE_(TODO)");
-    // confirm t1 did not get approved
-    assert_eq!(
-        view!(dao.get_proposal(t1)).unwrap_json::<Proposal>().status,
-        ProposalStatus::InProgress
-    );
+    should_fail_with(res, 0, "ERR_PERMISSION_DENIED");
 
     // user3 tries to finalize t2
-    let res = call!(user3, dao.act_proposal(t2, Action::Finalize, None));
-    should_fail_with(res, 0, "ERR_FINALIZE_(TODO)");
+    call!(user3, dao.act_proposal(t2, Action::Finalize, None)).assert_success();
     // confirm t2 did not get approved
     assert_eq!(
         view!(dao.get_proposal(t2)).unwrap_json::<Proposal>().status,

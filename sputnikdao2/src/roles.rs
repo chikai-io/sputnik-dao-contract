@@ -122,25 +122,45 @@ impl Contract {
     // TODO: update other infos
     /// Doesn't fail, because will be used on the finalization of the proposal.
     pub fn add_role(&mut self, new_role: RolePermission) -> bool {
-        for role in &self.roles {
+        for role in self.roles.iter() {
             if role.name == new_role.name {
-                env::log_str(&format!("ERR_ROLE_DUPLCIATED_NAME:{}", new_role.name.0));
+                env::log_str(&format!(
+                    "ERR_ROLE_DUPLCIATED_NAME:{}",
+                    new_role.name.0.as_str()
+                ));
                 return false;
             }
         }
-        self.roles.push(new_role);
-        return true;
+        self.roles.push(new_role.clone());
+        self.init_proposal_relation(new_role.name);
+        true
     }
 
     // TODO: update other infos
     /// Doesn't fail, because will be used on the finalization of the proposal.
     pub fn change_role(&mut self, role_name: &NewRoleName, new_role: RolePermission) -> bool {
         for role in self.roles.iter_mut() {
-            if role.name == *role_name {
-                *role = new_role;
-                return true;
+            let old_role_name = role.name.clone();
+            if old_role_name != *role_name {
+                continue;
             }
+
+            *role = new_role;
+            let old_role_proposals = self
+                .role_votes
+                .remove(&old_role_name)
+                .unwrap_or_else(|| env::panic_str("ERR_ROLE_NAME_NOT_FOUND"));
+
+            // TODO: need to filter-out some proposals,
+            // and also scan for new proposals to add
+
+            if let Some(_prev) = self.role_votes.insert(role_name, &old_role_proposals) {
+                env::panic_str("ERR_ROLE_VOTES_REPEATED_KEY");
+            }
+
+            return true;
         }
+
         env::log_str(&format!("ERR_ROLE_NAME_NOT_FOUND:{}", new_role.name.0));
         false
     }
@@ -150,10 +170,16 @@ impl Contract {
     pub fn remove_role(&mut self, role_name: &NewRoleName) -> bool {
         for i in 0..self.roles.len() {
             let role = &self.roles[i];
-            if role.name == *role_name {
-                self.roles.swap_remove(i);
-                return true;
+            if role.name != *role_name {
+                continue;
             }
+
+            self.roles.swap_remove(i);
+            if self.role_votes.remove(role_name).is_none() {
+                env::panic_str("ERR_ROLE_VOTES_MISSING_VALUE");
+            }
+
+            return true;
         }
         env::log_str(&format!("ERR_ROLE_NAME_NOT_FOUND:{}", role_name.0));
         false
@@ -251,6 +277,74 @@ impl Contract {
             })
             .collect();
         (allowed_roles, allowed)
+    }
+
+    /// Roles that may interact or decide the state of a proposal.  
+    ///
+    /// This is not related to any user nor member in particular and
+    /// depends only on the Role's settings.
+    pub fn allowed_roles(&self, proposal_kind: &ProposalKind, action: &Action) -> Vec<NewRoleName> {
+        let proposal_kind = proposal_kind.to_policy_label();
+        let action = action.to_policy_label();
+        let allowed_roles = self
+            .roles
+            .iter()
+            .filter_map(|role| {
+                let permissions = &role.permissions;
+                let allowed_role = permissions.contains(&format!("{}:{}", proposal_kind, action))
+                    || permissions.contains(&format!("{}:*", proposal_kind))
+                    || permissions.contains(&format!("*:{}", action))
+                    || permissions.contains("*:*");
+                if allowed_role {
+                    Some(role.name.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        allowed_roles
+    }
+
+    pub fn init_proposal_relation(&mut self, role: NewRoleName) {
+        if let Some(_prev) = self.role_votes.insert(&role, &vec![]) {
+            env::panic_str("ERR_ROLE_VOTES_REPEATED_KEY");
+        }
+    }
+
+    /// For proposals that are entering the in-progress state,
+    /// adds a relationship from roles that are allowed to
+    /// set that proposal's state.
+    pub fn add_proposal_relation(&mut self, proposal_kind: &ProposalKind, proposal_id: ProposalId) {
+        for role in self.allowed_roles(proposal_kind, &Action::AddProposal) {
+            let mut proposal_ids = self
+                .role_votes
+                .get(&role)
+                .unwrap_or_else(|| env::panic_str("ERR_ROLE_VOTES_MISSING_KEY"));
+            proposal_ids.push(proposal_id);
+            self.role_votes.insert(&role, &proposal_ids);
+        }
+    }
+
+    /// For proposals that are leaving the in-progress state,
+    /// removes the relationship from roles that are allowed to
+    /// set that proposal's state.
+    pub fn remove_proposal_relation(
+        &mut self,
+        proposal_kind: &ProposalKind,
+        action: &Action,
+        proposal_id: ProposalId,
+    ) {
+        for role in self.allowed_roles(proposal_kind, action) {
+            let mut proposal_ids = self
+                .role_votes
+                .get(&role)
+                .unwrap_or_else(|| env::panic_str("ERR_ROLE_VOTES_MISSING_KEY"));
+            let i = proposal_ids
+                .binary_search(&proposal_id)
+                .unwrap_or_else(|_| env::panic_str("ERR_ROLE_VOTES_MISSING_ID"));
+            proposal_ids.remove(i);
+            self.role_votes.insert(&role, &proposal_ids);
+        }
     }
 
     /// Returns if given proposal kind is token weighted.
