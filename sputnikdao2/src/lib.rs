@@ -8,12 +8,12 @@ use near_sdk::{
     env, near_bindgen, AccountId, Balance, BorshStorageKey, CryptoHash, PanicOnDefault, Promise,
 };
 
-use crate::bounties::{Bounty, BountyClaim, VersionedBounty};
-pub use crate::policy::{
-    Policy, ProposalPermission, RoleKind, RolePermission, VersionedPolicy, VotePolicy,
+pub use crate::bounties::{Bounty, BountyClaim, BountyId, VersionedBounty};
+pub use crate::policy::{Policy, VersionedPolicy, VotePolicy};
+pub use crate::proposals::{
+    Proposal, ProposalId, ProposalInput, ProposalKind, ProposalStatus, VersionedProposal,
 };
-use crate::proposals::VersionedProposal;
-pub use crate::proposals::{Proposal, ProposalInput, ProposalKind, ProposalStatus};
+pub use crate::roles::{NewRoleName, ProposalPermission, RoleKind, RolePermission};
 pub use crate::types::{Action, Config};
 
 mod basic_action;
@@ -21,6 +21,7 @@ mod bounties;
 mod delegation;
 mod policy;
 mod proposals;
+mod roles;
 mod types;
 pub mod views;
 
@@ -28,6 +29,7 @@ pub mod views;
 pub enum StorageKeys {
     Config,
     Policy,
+    RoleVotes,
     Delegations,
     Proposals,
     Bounties,
@@ -44,6 +46,10 @@ pub struct Contract {
     /// Voting and permissions policy.
     pub policy: LazyOption<VersionedPolicy>,
 
+    /// List of roles and permissions for them in the current policy.
+    pub roles: Vec<RolePermission>,
+    pub role_votes: LookupMap<NewRoleName, Vec<ProposalId>>,
+
     /// Amount of $NEAR locked for storage / bonds.
     pub locked_amount: Balance,
 
@@ -55,18 +61,18 @@ pub struct Contract {
     pub delegations: LookupMap<AccountId, Balance>,
 
     /// Last available id for the proposals.
-    pub last_proposal_id: u64,
+    pub last_proposal_id: ProposalId,
     /// Proposal map from ID to proposal information.
-    pub proposals: LookupMap<u64, VersionedProposal>,
+    pub proposals: LookupMap<ProposalId, VersionedProposal>,
 
     /// Last available id for the bounty.
-    pub last_bounty_id: u64,
+    pub last_bounty_id: BountyId,
     /// Bounties map from ID to bounty information.
-    pub bounties: LookupMap<u64, VersionedBounty>,
+    pub bounties: LookupMap<BountyId, VersionedBounty>,
     /// Bounty claimers map per user. Allows quickly to query for each users their claims.
     pub bounty_claimers: LookupMap<AccountId, Vec<BountyClaim>>,
     /// Count of claims per bounty.
-    pub bounty_claims_count: LookupMap<u64, u32>,
+    pub bounty_claims_count: LookupMap<BountyId, u32>,
 
     /// Large blob storage.
     pub blobs: LookupMap<CryptoHash, AccountId>,
@@ -75,10 +81,12 @@ pub struct Contract {
 #[near_bindgen]
 impl Contract {
     #[init]
-    pub fn new(config: Config, policy: VersionedPolicy) -> Self {
+    pub fn new(config: Config, policy: VersionedPolicy, default_council: Vec<AccountId>) -> Self {
         Self {
             config: LazyOption::new(StorageKeys::Config, Some(&config)),
             policy: LazyOption::new(StorageKeys::Policy, Some(&policy.upgrade())),
+            roles: roles::default_roles(default_council),
+            role_votes: LookupMap::new(StorageKeys::RoleVotes),
             staking_id: None,
             total_delegation_amount: 0,
             delegations: LookupMap::new(StorageKeys::Delegations),
@@ -201,7 +209,8 @@ mod tests {
         testing_env!(context.predecessor_account_id(accounts(1)).build());
         let mut contract = Contract::new(
             Config::test_config(),
-            VersionedPolicy::Default(vec![accounts(1).into()]),
+            VersionedPolicy::Default,
+            vec![accounts(1).into()],
         );
         let id = create_proposal(&mut context, &mut contract);
         assert_eq!(contract.get_proposal(id).proposal.description, "test");
@@ -234,7 +243,7 @@ mod tests {
             description: "test".to_string(),
             kind: ProposalKind::AddMemberToRole {
                 member_id: accounts(2).into(),
-                role: "council".to_string(),
+                role: NewRoleName("council".to_string()),
             },
         });
     }
@@ -246,7 +255,8 @@ mod tests {
         testing_env!(context.predecessor_account_id(accounts(1)).build());
         let mut contract = Contract::new(
             Config::test_config(),
-            VersionedPolicy::Default(vec![accounts(1).into()]),
+            VersionedPolicy::Default,
+            vec![accounts(1).into()],
         );
         let id = create_proposal(&mut context, &mut contract);
         assert_eq!(contract.get_proposal(id).proposal.description, "test");
@@ -257,11 +267,11 @@ mod tests {
     fn test_remove_proposal_allowed() {
         let mut context = VMContextBuilder::new();
         testing_env!(context.predecessor_account_id(accounts(1)).build());
-        let mut policy = VersionedPolicy::Default(vec![accounts(1).into()]).upgrade();
-        policy.to_policy_mut().roles[1]
+        let mut policy = VersionedPolicy::Default.upgrade();
+        let mut contract = Contract::new(Config::test_config(), policy, vec![accounts(1).into()]);
+        contract.roles[1]
             .permissions
             .insert("*:RemoveProposal".to_string());
-        let mut contract = Contract::new(Config::test_config(), policy);
         let id = create_proposal(&mut context, &mut contract);
         assert_eq!(contract.get_proposal(id).proposal.description, "test");
         contract.act_proposal(id, Action::RemoveProposal, None);
@@ -274,7 +284,8 @@ mod tests {
         testing_env!(context.predecessor_account_id(accounts(1)).build());
         let mut contract = Contract::new(
             Config::test_config(),
-            VersionedPolicy::Default(vec![accounts(1).into()]),
+            VersionedPolicy::Default,
+            vec![accounts(1).into()],
         );
         let id = create_proposal(&mut context, &mut contract);
         testing_env!(context
@@ -290,7 +301,8 @@ mod tests {
         testing_env!(context.predecessor_account_id(accounts(1)).build());
         let mut contract = Contract::new(
             Config::test_config(),
-            VersionedPolicy::Default(vec![accounts(1).into(), accounts(2).into()]),
+            VersionedPolicy::Default,
+            vec![accounts(1).into(), accounts(2).into()],
         );
         let id = create_proposal(&mut context, &mut contract);
         contract.act_proposal(id, Action::VoteApprove, None);
@@ -303,20 +315,20 @@ mod tests {
         testing_env!(context.predecessor_account_id(accounts(1)).build());
         let mut contract = Contract::new(
             Config::test_config(),
-            VersionedPolicy::Default(vec![accounts(1).into()]),
+            VersionedPolicy::Default,
+            vec![accounts(1).into()],
         );
         testing_env!(context.attached_deposit(to_yocto("1")).build());
         let id = contract.add_proposal(ProposalInput {
             description: "test".to_string(),
             kind: ProposalKind::AddMemberToRole {
                 member_id: accounts(2).into(),
-                role: "missing".to_string(),
+                role: NewRoleName("missing".to_string()),
             },
         });
         contract.act_proposal(id, Action::VoteApprove, None);
-        let x = contract.get_policy();
         // still 2 roles: all and council.
-        assert_eq!(x.roles.len(), 2);
+        assert_eq!(contract.roles.len(), 2);
     }
 
     #[test]
@@ -326,14 +338,18 @@ mod tests {
         testing_env!(context.predecessor_account_id(accounts(1)).build());
         let mut contract = Contract::new(
             Config::test_config(),
-            VersionedPolicy::Default(vec![accounts(1).into()]),
+            VersionedPolicy::Default,
+            vec![accounts(1).into()],
         );
         testing_env!(context.attached_deposit(to_yocto("1")).build());
         let _id = contract.add_proposal(ProposalInput {
             description: "test".to_string(),
             kind: ProposalKind::ChangePolicy {
-                policy: VersionedPolicy::Default(vec![]),
+                policy: VersionedPolicy::Default,
             },
         });
+        // TODO: test mixing policy with roles with
+        // empty members
+        // vec![]
     }
 }

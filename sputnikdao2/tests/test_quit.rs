@@ -2,14 +2,15 @@
 #![allow(clippy::identity_op)]
 
 use crate::utils::{
-    add_member_to_role_proposal, add_proposal, setup_dao, should_fail_with, vote, Contract,
+    add_member_to_role_proposal, add_proposal, add_role, add_user_to_roles, dao_roles, new_role,
+    role_members, setup_dao, should_fail_with, vote, Contract, RoleNamesAndMembers,
 };
 use near_sdk::AccountId;
 use near_sdk_sim::{call, to_yocto, view};
 use near_sdk_sim::{ExecutionResult, UserAccount};
 use sputnikdao2::{
-    Action, Policy, Proposal, ProposalInput, ProposalKind, ProposalPermission, ProposalStatus,
-    RoleKind, RolePermission, VersionedPolicy,
+    Action, NewRoleName, Policy, Proposal, ProposalInput, ProposalKind, ProposalPermission,
+    ProposalStatus, RoleKind, RolePermission, VersionedPolicy,
 };
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -22,84 +23,6 @@ const YOTTA: u128 = MEGA * MEGA * MEGA * MEGA;
 
 fn user(id: u32) -> AccountId {
     format!("user{}", id).parse().unwrap()
-}
-
-fn new_role(name: String, permissions: HashSet<ProposalPermission>) -> RolePermission {
-    RolePermission {
-        name,
-        kind: RoleKind::Group(HashSet::new()),
-        permissions,
-        vote_policy: HashMap::new(),
-    }
-}
-
-/// Updates the policy, pushing the roles into it.
-fn policy_extend_roles(root: &UserAccount, dao: &Contract, roles: Vec<RolePermission>) {
-    {
-        let mut policy = view!(dao.get_policy()).unwrap_json::<Policy>();
-        policy.roles.extend(roles);
-        add_proposal(
-            root,
-            dao,
-            ProposalInput {
-                description: "new_policy".to_string(),
-                kind: ProposalKind::ChangePolicy {
-                    policy: VersionedPolicy::Current(policy.clone()),
-                },
-            },
-        )
-        .assert_success();
-        let change_policy = view!(dao.get_last_proposal_id()).unwrap_json::<u64>();
-        assert_eq!(change_policy, 1);
-        call!(
-            root,
-            dao.act_proposal(change_policy - 1, Action::VoteApprove, None)
-        )
-        .assert_success();
-    };
-}
-
-fn add_user_to_roles(
-    root: &UserAccount,
-    dao: &Contract,
-    user: &UserAccount,
-    role_names: Vec<&str>,
-) {
-    for role_name in role_names {
-        add_member_to_role_proposal(root, dao, user.account_id.clone(), role_name.to_string())
-            .assert_success();
-
-        // approval
-        let proposal = view!(dao.get_last_proposal_id()).unwrap_json::<u64>();
-        call!(
-            root,
-            dao.act_proposal(proposal - 1, Action::VoteApprove, None)
-        )
-        .assert_success();
-    }
-}
-
-/// Given a RolePermission, get it's members in a sorted `Vec`.
-fn role_members(role_permission: &sputnikdao2::RolePermission) -> Vec<AccountId> {
-    if let RoleKind::Group(ref members) = role_permission.kind {
-        let mut members = members.iter().cloned().collect::<Vec<_>>();
-        members.sort();
-        members
-    } else {
-        vec![]
-    }
-}
-
-type RoleNamesAndMembers = Vec<(String, Vec<AccountId>)>;
-
-/// Get dao role names and their members
-fn dao_roles(dao: &Contract) -> RoleNamesAndMembers {
-    view!(dao.get_policy())
-        .unwrap_json::<Policy>()
-        .roles
-        .into_iter()
-        .map(|role_permission| (role_permission.name.clone(), role_members(&role_permission)))
-        .collect()
 }
 
 type RoleNamesAndMembersRef<'a> = Vec<(&'a str, Vec<&'a AccountId>)>;
@@ -163,11 +86,9 @@ fn test_quitting_the_dao() {
     let role_23 = new_role("has_23".to_string(), HashSet::new());
     let role_234 = new_role("has_234".to_string(), HashSet::new());
 
-    policy_extend_roles(
-        &root,
-        &dao,
-        vec![role_none, role_2, role_3, role_23, role_234],
-    );
+    for role in [role_none, role_2, role_3, role_23, role_234] {
+        add_role(&root, &dao, role);
+    }
 
     add_user_to_roles(&root, &dao, &user2, vec!["has_2", "has_23", "has_234"]);
     add_user_to_roles(&root, &dao, &user3, vec!["has_3", "has_23", "has_234"]);
@@ -291,7 +212,7 @@ fn test_quitting_the_dao() {
 
 /// Tests a role with Ratio = 1/2 with two members,
 /// when one member votes and then the other one quits.  
-/// There should be a way for the users to "finalize"
+/// There should be a way for the user to "finalize"
 /// the decision on the proposal, since it would now only
 /// require that single vote.
 ///
@@ -315,7 +236,7 @@ fn test_quit_removes_votes1() {
     {
         let permissions = vec!["*:*".to_string()].into_iter().collect();
         let role_23 = new_role("has_23".to_string(), permissions);
-        policy_extend_roles(&root, &dao, vec![role_23]);
+        add_role(&root, &dao, role_23);
     }
 
     add_user_to_roles(&root, &dao, &user2, vec!["has_23"]);
@@ -351,6 +272,8 @@ fn test_quit_removes_votes1() {
     // fail: user3 tries to finelize t2
     let res = call!(user3, dao.act_proposal(t2, Action::Finalize, None));
     should_fail_with(res, 0, "ERR_PERMISSION_DENIED");
+    // a member that has no role-relations to a proposal cannot
+    // finalize it
 }
 
 /// Tests a role with Ratio = 1/2 with two members,
@@ -378,7 +301,7 @@ fn test_quit_removes_votes2() {
     {
         let permissions = vec!["*:*".to_string()].into_iter().collect();
         let role_23 = new_role("has_23".to_string(), permissions);
-        policy_extend_roles(&root, &dao, vec![role_23]);
+        add_role(&root, &dao, role_23);
     }
 
     add_user_to_roles(&root, &dao, &user2, vec!["has_23"]);

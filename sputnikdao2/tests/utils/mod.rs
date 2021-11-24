@@ -5,14 +5,17 @@ pub use near_sdk::json_types::{Base64VecU8, U64};
 use near_sdk::{AccountId, Balance};
 use near_sdk_sim::transaction::ExecutionStatus;
 use near_sdk_sim::{
-    call, deploy, init_simulator, to_yocto, ContractAccount, ExecutionResult, UserAccount,
+    call, deploy, init_simulator, to_yocto, view, ContractAccount, ExecutionResult, UserAccount,
 };
 
 use near_sdk::json_types::U128;
 use sputnik_staking::ContractContract as StakingContract;
 use sputnikdao2::{
-    Action, Config, ContractContract as DAOContract, ProposalInput, ProposalKind, VersionedPolicy,
+    Action, Config, ContractContract as DAOContract, NewRoleName, ProposalInput, ProposalKind,
+    ProposalPermission, RoleKind, RolePermission, VersionedPolicy,
 };
+use std::collections::HashMap;
+use std::collections::HashSet;
 use test_token::ContractContract as TestTokenContract;
 
 near_sdk_sim::lazy_static_include::lazy_static_include_bytes! {
@@ -63,7 +66,7 @@ pub fn setup_dao() -> (UserAccount, Contract) {
         bytes: &DAO_WASM_BYTES,
         signer_account: root,
         deposit: to_yocto("200"),
-        init_method: new(config, VersionedPolicy::Default(vec![root.account_id.clone()]))
+        init_method: new(config, VersionedPolicy::Default, vec![root.account_id.clone()])
     );
     (root, dao)
 }
@@ -106,6 +109,84 @@ pub fn add_member_proposal(
     add_member_to_role_proposal(root, dao, member_id, "council".to_string())
 }
 
+pub fn new_role(name: String, permissions: HashSet<ProposalPermission>) -> RolePermission {
+    RolePermission {
+        name: NewRoleName(name),
+        kind: RoleKind::Group(HashSet::new()),
+        permissions,
+        vote_policy: HashMap::new(),
+    }
+}
+
+/// Pushes a role into the contract.
+pub fn add_role(root: &UserAccount, dao: &Contract, role: RolePermission) {
+    {
+        add_proposal(
+            root,
+            dao,
+            ProposalInput {
+                description: "new_role".to_string(),
+                kind: ProposalKind::AddRole { role },
+            },
+        )
+        .assert_success();
+
+        let proposal = view!(dao.get_last_proposal_id()).unwrap_json::<u64>();
+        call!(
+            root,
+            dao.act_proposal(proposal - 1, Action::VoteApprove, None)
+        )
+        .assert_success();
+    };
+}
+
+pub fn add_user_to_roles(
+    root: &UserAccount,
+    dao: &Contract,
+    user: &UserAccount,
+    role_names: Vec<&str>,
+) {
+    for role_name in role_names {
+        add_member_to_role_proposal(root, dao, user.account_id.clone(), role_name.to_string())
+            .assert_success();
+
+        // approval
+        let proposal = view!(dao.get_last_proposal_id()).unwrap_json::<u64>();
+        call!(
+            root,
+            dao.act_proposal(proposal - 1, Action::VoteApprove, None)
+        )
+        .assert_success();
+    }
+}
+
+/// Given a RolePermission, get it's members in a sorted `Vec`.
+pub fn role_members(role_permission: &sputnikdao2::RolePermission) -> Vec<AccountId> {
+    if let RoleKind::Group(ref members) = role_permission.kind {
+        let mut members = members.iter().cloned().collect::<Vec<_>>();
+        members.sort();
+        members
+    } else {
+        vec![]
+    }
+}
+
+pub type RoleNamesAndMembers = Vec<(String, Vec<AccountId>)>;
+
+/// Get dao role names and their members
+pub fn dao_roles(dao: &Contract) -> RoleNamesAndMembers {
+    view!(dao.get_roles())
+        .unwrap_json::<Vec<RolePermission>>()
+        .into_iter()
+        .map(|role_permission| {
+            (
+                role_permission.name.0.clone(),
+                role_members(&role_permission),
+            )
+        })
+        .collect()
+}
+
 pub fn add_member_to_role_proposal(
     root: &UserAccount,
     dao: &Contract,
@@ -117,7 +198,10 @@ pub fn add_member_to_role_proposal(
         dao,
         ProposalInput {
             description: "test".to_string(),
-            kind: ProposalKind::AddMemberToRole { member_id, role },
+            kind: ProposalKind::AddMemberToRole {
+                member_id,
+                role: NewRoleName(role),
+            },
         },
     )
 }

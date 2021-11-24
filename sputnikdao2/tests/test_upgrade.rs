@@ -1,3 +1,5 @@
+#![allow(clippy::ref_in_deref)]
+
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
 use near_sdk::json_types::Base58CryptoHash;
 use near_sdk::serde_json::json;
@@ -83,7 +85,7 @@ fn test_upgrade_other() {
         ProposalInput {
             description: "test".to_string(),
             kind: ProposalKind::UpgradeRemote {
-                receiver_id: ref_account_id.clone(),
+                receiver_id: ref_account_id,
                 method_name: "upgrade".to_string(),
                 hash,
             },

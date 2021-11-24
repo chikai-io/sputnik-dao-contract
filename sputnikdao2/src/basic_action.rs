@@ -19,10 +19,11 @@ impl Contract {
             env::panic_str("ERR_QUIT_WRONG_DAO");
         }
 
-        let mut new_policy = self.policy.get().unwrap().to_policy();
-        let removed = new_policy.remove_member_from_all_roles(&quitting_member);
-        self.policy
-            .set(&crate::VersionedPolicy::Current(new_policy));
+        let removed = self.remove_member_from_all_roles(&quitting_member);
+        // let mut new_policy = self.policy.get().unwrap().to_policy();
+        // let removed = new_policy.remove_member_from_all_roles(&quitting_member);
+        // self.policy
+        //     .set(&crate::VersionedPolicy::Current(new_policy));
         removed
     }
 }

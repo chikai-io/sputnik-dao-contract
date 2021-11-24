@@ -1,3 +1,5 @@
+#![allow(clippy::ref_in_deref)]
+
 use std::collections::HashMap;
 
 use near_sdk::json_types::U128;
@@ -7,7 +9,7 @@ use near_sdk_sim::{call, to_yocto, view};
 use crate::utils::*;
 use sputnik_staking::User;
 use sputnikdao2::{
-    Action, Policy, Proposal, ProposalInput, ProposalKind, ProposalStatus, RoleKind,
+    Action, NewRoleName, Policy, Proposal, ProposalInput, ProposalKind, ProposalStatus, RoleKind,
     RolePermission, VersionedPolicy, VotePolicy,
 };
 
@@ -24,26 +26,6 @@ fn test_multi_council() {
     let user2 = root.create_user(user(2), to_yocto("1000"));
     let user3 = root.create_user(user(3), to_yocto("1000"));
     let new_policy = Policy {
-        roles: vec![
-            RolePermission {
-                name: "all".to_string(),
-                kind: RoleKind::Everyone,
-                permissions: vec!["*:AddProposal".to_string()].into_iter().collect(),
-                vote_policy: HashMap::default(),
-            },
-            RolePermission {
-                name: "council".to_string(),
-                kind: RoleKind::Group(vec![user(1), user(2)].into_iter().collect()),
-                permissions: vec!["*:*".to_string()].into_iter().collect(),
-                vote_policy: HashMap::default(),
-            },
-            RolePermission {
-                name: "community".to_string(),
-                kind: RoleKind::Group(vec![user(1), user(3), user(4)].into_iter().collect()),
-                permissions: vec!["*:*".to_string()].into_iter().collect(),
-                vote_policy: HashMap::default(),
-            },
-        ],
         default_vote_policy: VotePolicy::default(),
         proposal_bond: U128(10u128.pow(24)),
         proposal_period: U64::from(1_000_000_000 * 60 * 60 * 24 * 7),
@@ -63,15 +45,52 @@ fn test_multi_council() {
     .assert_success();
     vote(vec![&root], &dao, 0);
     assert_eq!(view!(dao.get_policy()).unwrap_json::<Policy>(), new_policy);
+
+    {
+        // adds "community" role
+        add_role(
+            &root,
+            &dao,
+            RolePermission {
+                name: NewRoleName("community".to_string()),
+                kind: RoleKind::Group(vec![user(1), user(3), user(4)].into_iter().collect()),
+                permissions: vec!["*:*".to_string()].into_iter().collect(),
+                vote_policy: HashMap::default(),
+            },
+        );
+
+        // add user1 and user2 to "council", and removes "root" from it
+        add_proposal(
+            &root,
+            &dao,
+            ProposalInput {
+                description: "change council".to_string(),
+                kind: ProposalKind::ChangeRole {
+                    name: NewRoleName("council".to_string()),
+                    change_to: RolePermission {
+                        name: NewRoleName("council".to_string()),
+                        kind: RoleKind::Group(vec![user(1), user(2)].into_iter().collect()),
+                        permissions: vec!["*:*".to_string()].into_iter().collect(),
+                        vote_policy: HashMap::default(),
+                    },
+                },
+            },
+        )
+        .assert_success();
+        let proposal = view!(dao.get_last_proposal_id()).unwrap_json::<u64>();
+        vote(vec![&root], &dao, proposal - 1);
+    }
+
     add_transfer_proposal(&root, &dao, base_token(), user(1), 1_000_000, None).assert_success();
-    vote(vec![&user2], &dao, 1);
-    vote(vec![&user3], &dao, 1);
-    let proposal = view!(dao.get_proposal(1)).unwrap_json::<Proposal>();
+    let proposal_id = view!(dao.get_last_proposal_id()).unwrap_json::<u64>();
+    vote(vec![&user2], &dao, proposal_id - 1);
+    vote(vec![&user3], &dao, proposal_id - 1);
+    let proposal = view!(dao.get_proposal(proposal_id - 1)).unwrap_json::<Proposal>();
     // Votes from members in different councils.
     assert_eq!(proposal.status, ProposalStatus::InProgress);
     // Finish with vote that is in both councils, which approves the proposal.
-    vote(vec![&user1], &dao, 1);
-    let proposal = view!(dao.get_proposal(1)).unwrap_json::<Proposal>();
+    vote(vec![&user1], &dao, proposal_id - 1);
+    let proposal = view!(dao.get_proposal(proposal_id - 1)).unwrap_json::<Proposal>();
     assert_eq!(proposal.status, ProposalStatus::Approved);
 }
 
@@ -96,10 +115,11 @@ fn test_create_dao_and_use_token() {
     // Add 3rd member.
     add_member_proposal(&user2, &dao, user3.account_id.clone()).assert_success();
     vote(vec![&root, &user2], &dao, 1);
-    let policy = view!(dao.get_policy()).unwrap_json::<Policy>();
-    assert_eq!(policy.roles.len(), 2);
+
+    let roles = view!(dao.get_roles()).unwrap_json::<Vec<RolePermission>>();
+    assert_eq!(roles.len(), 2);
     assert_eq!(
-        policy.roles[1].kind,
+        roles[1].kind,
         RoleKind::Group(
             vec![
                 root.account_id.clone(),

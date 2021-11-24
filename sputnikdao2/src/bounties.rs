@@ -12,7 +12,7 @@ use crate::*;
 #[serde(crate = "near_sdk::serde")]
 pub struct BountyClaim {
     /// Bounty id that was claimed.
-    bounty_id: u64,
+    bounty_id: BountyId,
     /// Start time of the claim.
     start_time: U64,
     /// Deadline specified by claimer.
@@ -20,6 +20,8 @@ pub struct BountyClaim {
     /// Completed?
     completed: bool,
 }
+
+pub type BountyId = u64;
 
 /// Bounty information.
 #[derive(BorshSerialize, BorshDeserialize, Serialize, Deserialize, Clone)]
@@ -56,7 +58,7 @@ impl From<VersionedBounty> for Bounty {
 impl Contract {
     /// Adds bounty to the storage and returns it's id.
     /// Must not fail.
-    pub(crate) fn internal_add_bounty(&mut self, bounty: &Bounty) -> u64 {
+    pub(crate) fn internal_add_bounty(&mut self, bounty: &Bounty) -> BountyId {
         let id = self.last_bounty_id;
         self.bounties
             .insert(&id, &VersionedBounty::Default(bounty.clone()));
@@ -67,7 +69,7 @@ impl Contract {
     /// This must be called when proposal to payout bounty has been voted either successfully or not.
     pub(crate) fn internal_execute_bounty_payout(
         &mut self,
-        id: u64,
+        id: BountyId,
         receiver_id: &AccountId,
         success: bool,
     ) -> PromiseOrValue<()> {
@@ -94,7 +96,7 @@ impl Contract {
         }
     }
 
-    fn internal_find_claim(&self, bounty_id: u64, claims: &[BountyClaim]) -> Option<usize> {
+    fn internal_find_claim(&self, bounty_id: BountyId, claims: &[BountyClaim]) -> Option<usize> {
         for i in 0..claims.len() {
             if claims[i].bounty_id == bounty_id {
                 return Some(i);
@@ -110,7 +112,7 @@ impl Contract {
     /// Bond must be attached to the claim.
     /// Fails if already claimed `times` times.
     #[payable]
-    pub fn bounty_claim(&mut self, id: u64, deadline: U64) {
+    pub fn bounty_claim(&mut self, id: BountyId, deadline: U64) {
         let bounty: Bounty = self.bounties.get(&id).expect("ERR_NO_BOUNTY").into();
         let policy = self.policy.get().unwrap().to_policy();
         assert_eq!(
@@ -140,7 +142,12 @@ impl Contract {
     }
 
     /// Removes given claims from this bounty and user's claims.
-    fn internal_remove_claim(&mut self, id: u64, mut claims: Vec<BountyClaim>, claim_idx: usize) {
+    fn internal_remove_claim(
+        &mut self,
+        id: BountyId,
+        mut claims: Vec<BountyClaim>,
+        claim_idx: usize,
+    ) {
         claims.remove(claim_idx);
         if claims.len() == 0 {
             self.bounty_claimers.remove(&env::predecessor_account_id());
@@ -152,7 +159,11 @@ impl Contract {
         self.bounty_claims_count.insert(&id, &count);
     }
 
-    fn internal_get_claims(&mut self, id: u64, sender_id: &AccountId) -> (Vec<BountyClaim>, usize) {
+    fn internal_get_claims(
+        &mut self,
+        id: BountyId,
+        sender_id: &AccountId,
+    ) -> (Vec<BountyClaim>, usize) {
         let claims = self
             .bounty_claimers
             .get(&sender_id)
@@ -166,7 +177,12 @@ impl Contract {
     /// Report that bounty is done. Creates a proposal to vote for paying out the bounty.
     /// Only creator of the claim can call `done` on bounty that is still in progress.
     /// On expired, anyone can call it to free up the claim slot.
-    pub fn bounty_done(&mut self, id: u64, account_id: Option<AccountId>, description: String) {
+    pub fn bounty_done(
+        &mut self,
+        id: BountyId,
+        account_id: Option<AccountId>,
+        description: String,
+    ) {
         let sender_id = account_id.unwrap_or_else(|| env::predecessor_account_id());
         let (mut claims, claim_idx) = self.internal_get_claims(id, &sender_id);
         assert!(!claims[claim_idx].completed, "ERR_BOUNTY_CLAIM_COMPLETED");
@@ -193,7 +209,7 @@ impl Contract {
     }
 
     /// Give up working on the bounty.
-    pub fn bounty_giveup(&mut self, id: u64) -> PromiseOrValue<()> {
+    pub fn bounty_giveup(&mut self, id: BountyId) -> PromiseOrValue<()> {
         let policy = self.policy.get().unwrap().to_policy();
         let (claims, claim_idx) = self.internal_get_claims(id, &env::predecessor_account_id());
         let result = if env::block_timestamp() - claims[claim_idx].start_time.0
@@ -223,7 +239,7 @@ mod tests {
 
     use super::*;
 
-    fn add_bounty(context: &mut VMContextBuilder, contract: &mut Contract, times: u32) -> u64 {
+    fn add_bounty(context: &mut VMContextBuilder, contract: &mut Contract, times: u32) -> BountyId {
         testing_env!(context.attached_deposit(to_yocto("1")).build());
         let id = contract.add_proposal(ProposalInput {
             description: "test".to_string(),
@@ -249,7 +265,8 @@ mod tests {
         testing_env!(context.predecessor_account_id(accounts(1)).build());
         let mut contract = Contract::new(
             Config::test_config(),
-            VersionedPolicy::Default(vec![accounts(1).into()]),
+            VersionedPolicy::Default,
+            vec![accounts(1).into()],
         );
         add_bounty(&mut context, &mut contract, 2);
 
@@ -296,7 +313,8 @@ mod tests {
         testing_env!(context.predecessor_account_id(accounts(1)).build());
         let mut contract = Contract::new(
             Config::test_config(),
-            VersionedPolicy::Default(vec![accounts(1).into()]),
+            VersionedPolicy::Default,
+            vec![accounts(1).into()],
         );
         let id = add_bounty(&mut context, &mut contract, 1);
         contract.bounty_claim(id, U64::from(500));

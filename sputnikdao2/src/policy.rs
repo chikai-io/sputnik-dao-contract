@@ -2,84 +2,15 @@ use std::cmp::min;
 use std::collections::{HashMap, HashSet};
 
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
+use near_sdk::collections::{LazyOption, LookupMap};
 use near_sdk::json_types::{U128, U64};
 use near_sdk::serde::{Deserialize, Serialize};
 use near_sdk::{env, AccountId, Balance};
 
-use crate::proposals::{Proposal, ProposalKind, ProposalStatus, Vote};
+use crate::proposals::{Proposal, ProposalId, ProposalKind, ProposalStatus, Vote};
 use crate::types::Action;
 
-#[derive(BorshSerialize, BorshDeserialize, Serialize, Deserialize, Clone)]
-#[cfg_attr(not(target_arch = "wasm32"), derive(Debug, PartialEq))]
-#[serde(crate = "near_sdk::serde")]
-pub enum RoleKind {
-    /// Matches everyone, who is not matched by other roles.
-    Everyone,
-    /// Member greater or equal than given balance. Can use `1` as non-zero balance.
-    Member(U128),
-    /// Set of accounts.
-    Group(HashSet<AccountId>),
-}
-
-impl RoleKind {
-    /// Checks if user matches given role.
-    pub fn match_user(&self, user: &UserInfo) -> bool {
-        match self {
-            RoleKind::Everyone => true,
-            RoleKind::Member(amount) => user.amount >= amount.0,
-            RoleKind::Group(accounts) => accounts.contains(&user.account_id),
-        }
-    }
-
-    /// Returns the number of people in the this role or None if not supported role kind.
-    pub fn get_role_size(&self) -> Option<usize> {
-        match self {
-            RoleKind::Group(accounts) => Some(accounts.len()),
-            _ => None,
-        }
-    }
-
-    pub fn add_member_to_group(&mut self, member_id: &AccountId) -> Result<(), ()> {
-        match self {
-            RoleKind::Group(accounts) => {
-                accounts.insert(member_id.clone());
-                Ok(())
-            }
-            _ => Err(()),
-        }
-    }
-
-    pub fn remove_member_from_group(&mut self, member_id: &AccountId) -> Result<(), ()> {
-        match self {
-            RoleKind::Group(accounts) => {
-                accounts.remove(member_id);
-                Ok(())
-            }
-            _ => Err(()),
-        }
-    }
-}
-
-#[derive(BorshSerialize, BorshDeserialize, Serialize, Deserialize, Clone)]
-#[cfg_attr(not(target_arch = "wasm32"), derive(Debug, PartialEq))]
-#[serde(crate = "near_sdk::serde")]
-pub struct RolePermission {
-    /// Name of the role to display to the user.
-    pub name: String,
-    /// Kind of the role: defines which users this permissions apply.
-    pub kind: RoleKind,
-    /// Set of proposal actions (on certain kinds of proposals) that this
-    /// role allow it's members to execute.  
-    /// <proposal_kind>:<proposal_action>
-    pub permissions: HashSet<ProposalPermission>,
-    /// For each proposal kind, defines voting policy.
-    pub vote_policy: HashMap<String, VotePolicy>,
-}
-
-/// Set of proposal actions (on certain kinds of proposals) that a
-/// role allow it's members to execute.  
-/// <proposal_kind>:<proposal_action>
-pub type ProposalPermission = String;
+use crate::*;
 
 pub struct UserInfo {
     pub account_id: AccountId,
@@ -152,8 +83,6 @@ impl Default for VotePolicy {
 #[cfg_attr(not(target_arch = "wasm32"), derive(Debug, PartialEq))]
 #[serde(crate = "near_sdk::serde")]
 pub struct Policy {
-    /// List of roles and permissions for them in the current policy.
-    pub roles: Vec<RolePermission>,
     /// Default vote policy. Used when given proposal kind doesn't have special policy.
     pub default_vote_policy: VotePolicy,
     /// Proposal bond.
@@ -172,7 +101,7 @@ pub struct Policy {
 #[serde(crate = "near_sdk::serde", untagged)]
 pub enum VersionedPolicy {
     /// Default policy with given accounts as council.
-    Default(Vec<AccountId>),
+    Default,
     Current(Policy),
 }
 
@@ -182,31 +111,31 @@ pub enum VersionedPolicy {
 ///     - non token weighted voting, requires 1/2 of the group to vote
 ///     - proposal & bounty bond is 1N
 ///     - proposal & bounty forgiveness period is 1 day
-fn default_policy(council: Vec<AccountId>) -> Policy {
+fn default_policy() -> Policy {
     Policy {
-        roles: vec![
-            RolePermission {
-                name: "all".to_string(),
-                kind: RoleKind::Everyone,
-                permissions: vec!["*:AddProposal".to_string()].into_iter().collect(),
-                vote_policy: HashMap::default(),
-            },
-            RolePermission {
-                name: "council".to_string(),
-                kind: RoleKind::Group(council.into_iter().collect()),
-                // All actions except RemoveProposal are allowed by council.
-                permissions: vec![
-                    "*:AddProposal".to_string(),
-                    "*:VoteApprove".to_string(),
-                    "*:VoteReject".to_string(),
-                    "*:VoteRemove".to_string(),
-                    "*:Finalize".to_string(),
-                ]
-                .into_iter()
-                .collect(),
-                vote_policy: HashMap::default(),
-            },
-        ],
+        // roles: vec![
+        //     RolePermission {
+        //         name: "all".to_string(),
+        //         kind: RoleKind::Everyone,
+        //         permissions: vec!["*:AddProposal".to_string()].into_iter().collect(),
+        //         vote_policy: HashMap::default(),
+        //     },
+        //     RolePermission {
+        //         name: "council".to_string(),
+        //         kind: RoleKind::Group(council.into_iter().collect()),
+        //         // All actions except RemoveProposal are allowed by council.
+        //         permissions: vec![
+        //             "*:AddProposal".to_string(),
+        //             "*:VoteApprove".to_string(),
+        //             "*:VoteReject".to_string(),
+        //             "*:VoteRemove".to_string(),
+        //             "*:Finalize".to_string(),
+        //         ]
+        //         .into_iter()
+        //         .collect(),
+        //         vote_policy: HashMap::default(),
+        //     },
+        // ],
         default_vote_policy: VotePolicy::default(),
         proposal_bond: U128(10u128.pow(24)),
         proposal_period: U64::from(1_000_000_000 * 60 * 60 * 24 * 7),
@@ -219,9 +148,7 @@ impl VersionedPolicy {
     /// Upgrades either version of policy into the latest.
     pub fn upgrade(self) -> Self {
         match self {
-            VersionedPolicy::Default(accounts) => {
-                VersionedPolicy::Current(default_policy(accounts))
-            }
+            VersionedPolicy::Default => VersionedPolicy::Current(default_policy()),
             VersionedPolicy::Current(policy) => VersionedPolicy::Current(policy),
         }
     }
@@ -242,122 +169,16 @@ impl VersionedPolicy {
     }
 }
 
-impl Policy {
-    ///
-    /// Doesn't fail, because will be used on the finalization of the proposal.
-    pub fn add_member_to_role(&mut self, role: &String, member_id: &AccountId) {
-        for i in 0..self.roles.len() {
-            if &self.roles[i].name == role {
-                self.roles[i]
-                    .kind
-                    .add_member_to_group(member_id)
-                    .unwrap_or_else(|()| {
-                        env::log_str(&format!("ERR_ROLE_WRONG_KIND:{}", role));
-                    });
-                return;
-            }
-        }
-        env::log_str(&format!("ERR_ROLE_NOT_FOUND:{}", role));
-    }
+impl Policy {}
 
-    pub fn remove_member_from_role(&mut self, role: &String, member_id: &AccountId) {
-        for i in 0..self.roles.len() {
-            if &self.roles[i].name == role {
-                self.roles[i]
-                    .kind
-                    .remove_member_from_group(member_id)
-                    .unwrap_or_else(|()| {
-                        env::log_str(&format!("ERR_ROLE_WRONG_KIND:{}", role));
-                    });
-                return;
-            }
-        }
-        env::log_str(&format!("ERR_ROLE_NOT_FOUND:{}", role));
-    }
-
-    /// Removes `member_id` from all roles.  
-    /// Returns `true` if the member was removed from at least one role.
-    pub fn remove_member_from_all_roles(&mut self, member_id: &AccountId) -> bool {
-        let mut removed = false;
-        for role in self.roles.iter_mut() {
-            if let RoleKind::Group(ref mut members) = role.kind {
-                removed |= members.remove(member_id);
-            };
-        }
-        removed
-    }
-
-    /// Returns a set of role names (with the role's permissions) that this
-    /// user is a member of.
-    fn get_user_roles(&self, user: UserInfo) -> HashMap<String, &HashSet<ProposalPermission>> {
-        let mut roles = HashMap::default();
-        for role in self.roles.iter() {
-            if role.kind.match_user(&user) {
-                roles.insert(role.name.clone(), &role.permissions);
-            }
-        }
-        roles
-    }
-
-    /// Can given user execute given action on this proposal.
-    /// Returns all roles that allow this action.
-    pub fn can_execute_action(
-        &self,
-        user: UserInfo,
-        proposal_kind: &ProposalKind,
-        action: &Action,
-    ) -> (Vec<String>, bool) {
-        let roles = self.get_user_roles(user);
-        let mut allowed = false;
-        let proposal_kind = proposal_kind.to_policy_label();
-        let action = action.to_policy_label();
-        let allowed_roles = roles
-            .into_iter()
-            .filter_map(|(role, permissions)| {
-                let allowed_role = permissions.contains(&format!("{}:{}", proposal_kind, action))
-                    || permissions.contains(&format!("{}:*", proposal_kind))
-                    || permissions.contains(&format!("*:{}", action))
-                    || permissions.contains("*:*");
-                allowed = allowed || allowed_role;
-                if allowed_role {
-                    Some(role)
-                } else {
-                    None
-                }
-            })
-            .collect();
-        (allowed_roles, allowed)
-    }
-
-    /// Returns if given proposal kind is token weighted.
-    pub fn is_token_weighted(&self, role: &String, proposal_kind_label: &String) -> bool {
-        let role_info = self.internal_get_role(role).expect("ERR_ROLE_NOT_FOUND");
-        match role_info
-            .vote_policy
-            .get(proposal_kind_label)
-            .unwrap_or(&self.default_vote_policy)
-            .weight_kind
-        {
-            WeightKind::TokenWeight => true,
-            _ => false,
-        }
-    }
-
-    fn internal_get_role(&self, name: &String) -> Option<&RolePermission> {
-        for role in self.roles.iter() {
-            if role.name == *name {
-                return Some(role);
-            }
-        }
-        None
-    }
-
+impl Contract {
     /// Get proposal status for given proposal.
     /// Usually is called after changing it's state.
     pub fn proposal_status(
         &self,
         proposal: &Proposal,
-        roles: Vec<String>,
+        policy: &Policy,
+        role_names: Vec<NewRoleName>,
         total_supply: Balance,
     ) -> ProposalStatus {
         assert_eq!(
@@ -365,18 +186,18 @@ impl Policy {
             ProposalStatus::InProgress,
             "ERR_PROPOSAL_NOT_IN_PROGRESS"
         );
-        if proposal.submission_time.0 + self.proposal_period.0 < env::block_timestamp() {
+        if proposal.submission_time.0 + policy.proposal_period.0 < env::block_timestamp() {
             // Proposal expired.
             return ProposalStatus::Expired;
         };
-        for role in roles {
-            let role_str = format!("{:#?}", &role);
+        for role in role_names {
+            let role_str = format!("{:#?}", &role.0);
             env::log_str(&role_str);
             let role_info = self.internal_get_role(&role).expect("ERR_MISSING_ROLE");
             let vote_policy = role_info
                 .vote_policy
                 .get(&proposal.kind.to_policy_label().to_string())
-                .unwrap_or(&self.default_vote_policy);
+                .unwrap_or(&policy.default_vote_policy);
             let threshold = std::cmp::max(
                 vote_policy.quorum.0,
                 match &vote_policy.weight_kind {
