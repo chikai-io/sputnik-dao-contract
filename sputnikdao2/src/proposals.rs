@@ -161,6 +161,88 @@ impl From<Action> for Vote {
     }
 }
 
+/// Represents [`Vote`] capabilities in a single byte.
+#[derive(Clone, Copy, PartialEq)]
+pub struct VoteBitset(pub u8);
+
+impl From<Vote> for VoteBitset {
+    fn from(vote: Vote) -> VoteBitset {
+        let bitset = match vote {
+            Vote::Approve => 0b1 << 0,
+            Vote::Reject => 0b1 << 1,
+            Vote::Remove => 0b1 << 2,
+        };
+        VoteBitset(bitset)
+    }
+}
+
+impl VoteBitset {
+    pub const APPROVE: Self = VoteBitset(0b001);
+    pub const REJECT: Self = VoteBitset(0b010);
+    pub const REMOVE: Self = VoteBitset(0b100);
+    pub const NOTHING: Self = VoteBitset(0b000);
+
+    pub fn can_approve(&self) -> bool {
+        *self & Self::APPROVE == Self::APPROVE
+    }
+
+    pub fn can_reject(&self) -> bool {
+        *self & Self::REJECT == Self::REJECT
+    }
+
+    pub fn can_remove(&self) -> bool {
+        *self & Self::REMOVE == Self::REMOVE
+    }
+
+    pub fn is_nothing(&self) -> bool {
+        *self == Self::NOTHING
+    }
+
+    pub fn from_proposal_action(proposal_action: &str) -> Self {
+        match proposal_action {
+            "VoteApprove" => Self::APPROVE,
+            "VoteReject" => Self::REJECT,
+            "VoteRemove" => Self::REMOVE,
+            "*" => {
+                let mut vote_bitset = Self::NOTHING;
+                vote_bitset |= Self::APPROVE;
+                vote_bitset |= Self::REJECT;
+                vote_bitset |= Self::REMOVE;
+                vote_bitset
+            }
+            _ => Self::NOTHING,
+        }
+    }
+}
+
+impl std::ops::BitAnd for VoteBitset {
+    type Output = Self;
+
+    fn bitand(self, rhs: Self) -> Self::Output {
+        Self(self.0 & rhs.0)
+    }
+}
+
+impl std::ops::BitOr for VoteBitset {
+    type Output = Self;
+
+    fn bitor(self, rhs: Self) -> Self::Output {
+        Self(self.0 | rhs.0)
+    }
+}
+
+impl std::ops::BitAndAssign for VoteBitset {
+    fn bitand_assign(&mut self, rhs: Self) {
+        *self = *self & rhs
+    }
+}
+
+impl std::ops::BitOrAssign for VoteBitset {
+    fn bitor_assign(&mut self, rhs: Self) {
+        *self = *self | rhs
+    }
+}
+
 pub type ProposalId = u64;
 
 /// Proposal that are sent to this DAO.
@@ -198,8 +280,6 @@ impl From<VersionedProposal> for Proposal {
         }
     }
 }
-
-impl Proposal {}
 
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(crate = "near_sdk::serde")]
@@ -383,10 +463,7 @@ impl Contract {
 
     pub(crate) fn internal_user_info(&self) -> UserInfo {
         let account_id = env::predecessor_account_id();
-        UserInfo {
-            amount: self.get_user_weight(&account_id),
-            account_id,
-        }
+        UserInfo::new(&self, account_id)
     }
 
     /// Adds vote of the given user with given `amount` of weight. If user already voted, fails.

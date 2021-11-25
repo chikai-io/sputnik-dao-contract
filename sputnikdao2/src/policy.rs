@@ -12,9 +12,17 @@ use crate::types::Action;
 
 use crate::*;
 
+#[derive(Clone)]
 pub struct UserInfo {
     pub account_id: AccountId,
     pub amount: Balance,
+}
+
+impl UserInfo {
+    pub fn new(dao: &Contract, account_id: AccountId) -> Self {
+        let amount = dao.get_user_weight(&account_id);
+        UserInfo { account_id, amount }
+    }
 }
 
 /// Direct weight or ratio to total weight, used for the voting policy.
@@ -113,29 +121,6 @@ pub enum VersionedPolicy {
 ///     - proposal & bounty forgiveness period is 1 day
 fn default_policy() -> Policy {
     Policy {
-        // roles: vec![
-        //     RolePermission {
-        //         name: "all".to_string(),
-        //         kind: RoleKind::Everyone,
-        //         permissions: vec!["*:AddProposal".to_string()].into_iter().collect(),
-        //         vote_policy: HashMap::default(),
-        //     },
-        //     RolePermission {
-        //         name: "council".to_string(),
-        //         kind: RoleKind::Group(council.into_iter().collect()),
-        //         // All actions except RemoveProposal are allowed by council.
-        //         permissions: vec![
-        //             "*:AddProposal".to_string(),
-        //             "*:VoteApprove".to_string(),
-        //             "*:VoteReject".to_string(),
-        //             "*:VoteRemove".to_string(),
-        //             "*:Finalize".to_string(),
-        //         ]
-        //         .into_iter()
-        //         .collect(),
-        //         vote_policy: HashMap::default(),
-        //     },
-        // ],
         default_vote_policy: VotePolicy::default(),
         proposal_bond: U128(10u128.pow(24)),
         proposal_period: U64::from(1_000_000_000 * 60 * 60 * 24 * 7),

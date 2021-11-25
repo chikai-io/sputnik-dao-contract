@@ -12,6 +12,7 @@ pub use crate::bounties::{Bounty, BountyClaim, BountyId, VersionedBounty};
 pub use crate::policy::{Policy, VersionedPolicy, VotePolicy};
 pub use crate::proposals::{
     Proposal, ProposalId, ProposalInput, ProposalKind, ProposalStatus, VersionedProposal,
+    VoteBitset,
 };
 pub use crate::roles::{NewRoleName, ProposalPermission, RoleKind, RolePermission};
 pub use crate::types::{Action, Config};
