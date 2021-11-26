@@ -29,6 +29,33 @@ pub struct RolePermission {
     pub vote_policy: HashMap<String, VotePolicy>,
 }
 
+pub struct VotePolicyWeights(pub [Balance; 15]);
+
+impl RolePermission {
+    /// For a role, gets a user's voting weight for every
+    /// [`ProposalKind`] label.
+    pub fn vote_policy_weight_table(
+        //
+        &self,
+        // self.get_user_weight(&sender_id)
+        user_weight: Balance,
+        default_weight: Balance,
+    ) -> VotePolicyWeights {
+        let mut table = [default_weight; 15];
+        for (proposal_kind_label, vote_policy) in &self.vote_policy {
+            let index = ProposalKind::label_to_index(proposal_kind_label)
+                // `*` is not allowed in this situation
+                .unwrap_or_else(|| env::panic_str("ERR_BAD_PROPOSAL_KIND_LABEL"));
+
+            table[index] = match vote_policy.weight_kind {
+                WeightKind::TokenWeight => user_weight,
+                WeightKind::RoleWeight => 1,
+            };
+        }
+        VotePolicyWeights(table)
+    }
+}
+
 #[derive(
     BorshSerialize, BorshDeserialize, Serialize, Deserialize, Clone, Eq, PartialEq, Hash, PartialOrd,
 )]
@@ -227,6 +254,8 @@ impl Contract {
     /// Removes `member_id` from all roles.  
     /// Returns `true` if the member was removed from at least one role.
     pub fn remove_member_from_all_roles(&mut self, member_id: &AccountId) -> bool {
+        self.update_votes_from_quitting_member(member_id);
+
         let mut removed_from_any = false;
         for role in self.roles.iter_mut() {
             if let RoleKind::Group(ref mut members) = role.kind {
@@ -240,7 +269,10 @@ impl Contract {
 
     /// Returns a set of role names (with the role's permissions) that this
     /// user is a member of.
-    fn get_user_roles(&self, user: UserInfo) -> HashMap<NewRoleName, &HashSet<ProposalPermission>> {
+    pub fn get_user_roles(
+        &self,
+        user: UserInfo,
+    ) -> HashMap<NewRoleName, &HashSet<ProposalPermission>> {
         let mut roles = HashMap::default();
         for role in self.roles.iter() {
             if role.kind.match_user(&user) {

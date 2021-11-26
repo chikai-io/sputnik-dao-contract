@@ -14,9 +14,11 @@ pub use crate::proposals::{
     Proposal, ProposalId, ProposalInput, ProposalKind, ProposalStatus, VersionedProposal,
     PROPOSAL_KIND_LEN,
 };
-pub use crate::roles::{NewRoleName, ProposalPermission, RoleKind, RolePermission};
+pub use crate::roles::{
+    NewRoleName, ProposalPermission, RoleKind, RolePermission, VotePolicyWeights,
+};
 pub use crate::types::{Action, Config};
-pub use crate::vote::{ProposalKindVotes, Vote, VoteBitset};
+pub use crate::vote::{ProposalKindVotes, Vote, VoteActionBitset};
 
 mod basic_action;
 mod bounties;
