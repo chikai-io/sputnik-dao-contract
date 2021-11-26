@@ -12,10 +12,11 @@ pub use crate::bounties::{Bounty, BountyClaim, BountyId, VersionedBounty};
 pub use crate::policy::{Policy, VersionedPolicy, VotePolicy};
 pub use crate::proposals::{
     Proposal, ProposalId, ProposalInput, ProposalKind, ProposalStatus, VersionedProposal,
-    VoteBitset,
+    PROPOSAL_KIND_LEN,
 };
 pub use crate::roles::{NewRoleName, ProposalPermission, RoleKind, RolePermission};
 pub use crate::types::{Action, Config};
+pub use crate::vote::{ProposalKindVotes, Vote, VoteBitset};
 
 mod basic_action;
 mod bounties;
@@ -25,18 +26,19 @@ mod proposals;
 mod roles;
 mod types;
 pub mod views;
+mod vote;
 
 #[derive(BorshStorageKey, BorshSerialize)]
 pub enum StorageKeys {
     Config,
     Policy,
-    RoleVotes,
     Delegations,
     Proposals,
     Bounties,
     BountyClaimers,
     BountyClaimCounts,
     Blobs,
+    RoleVotes,
 }
 
 #[near_bindgen]

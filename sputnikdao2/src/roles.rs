@@ -2,14 +2,14 @@ use std::cmp::min;
 use std::collections::{HashMap, HashSet};
 
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
-use near_sdk::collections::{LazyOption, LookupMap};
 use near_sdk::json_types::{U128, U64};
 use near_sdk::serde::{Deserialize, Serialize};
 use near_sdk::{env, AccountId, Balance};
 
 use crate::policy::{UserInfo, VotePolicy, WeightKind};
-use crate::proposals::{Proposal, ProposalId, ProposalKind, ProposalStatus, Vote};
+use crate::proposals::{Proposal, ProposalId, ProposalKind, ProposalStatus};
 use crate::types::Action;
+use crate::vote::{RoleVoteInfo, Vote};
 
 use crate::*;
 
@@ -51,51 +51,6 @@ pub enum RoleKind {
     Member(U128),
     /// Set of accounts.
     Group(HashSet<AccountId>),
-}
-
-pub struct RoleVoteInfo {
-    pub name: NewRoleName,
-    pub permissions: Vec<PermissionVoteInfo>,
-}
-
-impl RoleVoteInfo {
-    pub fn new(name: NewRoleName) -> Self {
-        Self {
-            name,
-            permissions: Vec::new(),
-        }
-    }
-
-    // TODO: avoid needing this because a role can have many
-    // "*"'s, and many repeated `proposal_kind` on it's permissions.
-    // should use a table instead, containing all info from it's
-    // permissions
-    pub fn find(&self, proposal_kind: &str) -> Option<PermissionVoteInfo> {
-        self.permissions
-            .iter()
-            .find(|permission| {
-                (permission.proposal_kind == proposal_kind)
-                    || (permission.proposal_kind == "*")
-                    || (proposal_kind == "*")
-            })
-            .cloned()
-    }
-}
-
-/// Permission information that are related to voting.
-#[derive(Clone)]
-pub struct PermissionVoteInfo {
-    pub proposal_kind: String,
-    pub vote_bitset: VoteBitset,
-}
-
-impl PermissionVoteInfo {
-    pub fn new(proposal_kind: String, vote_bitset: VoteBitset) -> Self {
-        Self {
-            proposal_kind,
-            vote_bitset,
-        }
-    }
 }
 
 pub fn default_roles(council: Vec<AccountId>) -> Vec<RolePermission> {
@@ -249,10 +204,8 @@ impl Contract {
         env::log_str(&format!("ERR_ROLE_NOT_FOUND:{}", role_name.0));
     }
 
-    // TODO: if member had voted in a proposal,
-    // need to update the "role" vote cache
     pub fn remove_member_from_role(&mut self, role_name: &NewRoleName, member_id: &AccountId) {
-        self.update_votes_from_removed_member(role_name, member_id);
+        self.update_votes_from_role_removed_member(role_name, member_id);
 
         for i in 0..self.roles.len() {
             if &self.roles[i].name == role_name {
@@ -267,40 +220,6 @@ impl Contract {
             }
         }
         env::log_str(&format!("ERR_ROLE_NOT_FOUND:{}", role_name.0));
-    }
-
-    /// Updates the Role's vote cache stored in Proposals
-    /// related to a member that is getting removed from a Role.
-    ///
-    /// This should be called _before_ the user is removed
-    /// from the Role.
-    pub fn update_votes_from_removed_member(
-        &mut self,
-        role_name: &NewRoleName,
-        member_id: &AccountId,
-    ) {
-        let user_info = UserInfo::new(self, member_id.clone());
-        let user_role = if let Some(user_role) =
-            self.get_user_voting_role(user_info.clone(), role_name.clone())
-        {
-            user_role
-        } else {
-            // if the role that the member is being removed from
-            // is not related to voting, then there is no need to update
-            // anything
-            return;
-        };
-        let user_roles: Vec<_> = self
-            .get_user_voting_roles(user_info)
-            .into_iter()
-            .filter(|role| role.name != user_role.name)
-            .collect();
-
-        let proposals = self
-            .role_votes
-            .get(role_name)
-            .unwrap_or_else(|| env::panic_str("ERR_ROLE_VOTES_MISSING_KEY"));
-        for proposal in proposals {}
     }
 
     // TODO: if member had voted in a proposal,
@@ -327,166 +246,6 @@ impl Contract {
             if role.kind.match_user(&user) {
                 roles.insert(role.name.clone(), &role.permissions);
             }
-        }
-        roles
-    }
-
-    /// Returns the role name and it's `permissions`
-    /// information, that a user is related to.  
-    ///
-    /// Only information related to voting is considered.
-    ///
-    /// Returns `None` if that role is not related to voting
-    /// at all.
-    fn get_user_voting_role(&self, user: UserInfo, role_name: NewRoleName) -> Option<RoleVoteInfo> {
-        for role in self.roles.iter() {
-            if role.name != role_name {
-                continue;
-            }
-            if !role.kind.match_user(&user) {
-                continue;
-            }
-
-            let mut permissions = vec![];
-            for permission in &role.permissions {
-                let (proposal_kind, proposal_action) = {
-                    let split: Vec<&str> = permission.split(':').collect();
-                    assert_eq!(split.len(), 2);
-                    (split[0], split[1])
-                };
-
-                let vote_bitset = VoteBitset::from_proposal_action(proposal_action);
-
-                // skip this `proposal_kind` if it's not related to voting
-                if vote_bitset.is_nothing() {
-                    continue;
-                }
-
-                let proposal_kind = proposal_kind.to_string();
-                permissions.push(PermissionVoteInfo::new(proposal_kind, vote_bitset));
-            }
-
-            // skip this `role` if none of it's `proposal_action`'s
-            // are related to voting
-            return if permissions.is_empty() {
-                None
-            } else {
-                let mut role = RoleVoteInfo::new(role.name.clone());
-                role.permissions = permissions;
-                Some(role)
-            };
-        }
-        env::panic_str("ERR_ROLE_NOT_FOUND")
-    }
-
-    /// Returns a lists relating role names, and it's `permissions`
-    /// information, that a user is related to.  
-    ///
-    /// Only information related to voting is considered.
-    fn get_user_voting_roles(&self, user: UserInfo) -> Vec<RoleVoteInfo> {
-        let mut roles = vec![];
-        for role in self.roles.iter() {
-            if !role.kind.match_user(&user) {
-                continue;
-            }
-
-            let mut permissions = vec![];
-            for permission in &role.permissions {
-                let (proposal_kind, proposal_action) = {
-                    let split: Vec<&str> = permission.split(':').collect();
-                    assert_eq!(split.len(), 2);
-                    (split[0], split[1])
-                };
-
-                let vote_bitset = VoteBitset::from_proposal_action(proposal_action);
-
-                // skip this `proposal_kind` if it's not related to voting
-                if vote_bitset.is_nothing() {
-                    continue;
-                }
-
-                let proposal_kind = proposal_kind.to_string();
-                permissions.push(PermissionVoteInfo::new(proposal_kind, vote_bitset));
-            }
-
-            // skip this `role` if none of it's `proposal_action`'s
-            // are related to voting
-            if permissions.is_empty() {
-                continue;
-            }
-
-            let mut role = RoleVoteInfo::new(role.name.clone());
-            role.permissions = permissions;
-            roles.push(role);
-        }
-        roles
-    }
-
-    /// Returns a lists relating role names, and it's `permissions`
-    /// information, that a user is related to.  
-    ///
-    /// Only information related to voting is considered.  
-    /// The `target` role is filtered out, and the roles that
-    /// cannot possibly have any "voting" relation to the `target`
-    /// role are also filtered out.
-    fn get_user_voting_roles_filtered(
-        &self,
-        user: UserInfo,
-        target: &RoleVoteInfo,
-    ) -> Vec<RoleVoteInfo> {
-        let mut roles = vec![];
-        for role in self.roles.iter() {
-            // already got the target, and it should be separated
-            if role.name == target.name {
-                continue;
-            }
-            // skip if it's not related to the user
-            if !role.kind.match_user(&user) {
-                continue;
-            }
-
-            let mut permissions = vec![];
-            for permission in &role.permissions {
-                let (proposal_kind, proposal_action) = {
-                    let split: Vec<&str> = permission.split(':').collect();
-                    assert_eq!(split.len(), 2);
-                    (split[0], split[1])
-                };
-
-                let target_permission = if let Some(target_permission) = target
-                    .permissions
-                    .iter()
-                    .find(|permission| permission.proposal_kind == proposal_kind)
-                {
-                    target_permission
-                } else {
-                    // skip this `proposal_kind` if it's not related to the
-                    // target's ones
-                    continue;
-                };
-
-                let vote_bitset = VoteBitset::from_proposal_action(proposal_action);
-
-                // skip this `proposal_kind` if it's not related to voting,
-                // or if it's not related at all to the target's types of
-                // voting
-                if (vote_bitset & target_permission.vote_bitset).is_nothing() {
-                    continue;
-                }
-
-                let proposal_kind = proposal_kind.to_string();
-                permissions.push(PermissionVoteInfo::new(proposal_kind, vote_bitset));
-            }
-
-            // skip this `role` if none of it's `proposal_action`'s
-            // are related to voting, or not related to the target role
-            if permissions.is_empty() {
-                continue;
-            }
-
-            let mut role = RoleVoteInfo::new(role.name.clone());
-            role.permissions = permissions;
-            roles.push(role);
         }
         roles
     }

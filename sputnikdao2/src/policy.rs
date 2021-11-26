@@ -7,8 +7,9 @@ use near_sdk::json_types::{U128, U64};
 use near_sdk::serde::{Deserialize, Serialize};
 use near_sdk::{env, AccountId, Balance};
 
-use crate::proposals::{Proposal, ProposalId, ProposalKind, ProposalStatus, Vote};
+use crate::proposals::{Proposal, ProposalId, ProposalKind, ProposalStatus};
 use crate::types::Action;
+use crate::vote::Vote;
 
 use crate::*;
 
@@ -153,8 +154,6 @@ impl VersionedPolicy {
         }
     }
 }
-
-impl Policy {}
 
 impl Contract {
     /// Get proposal status for given proposal.

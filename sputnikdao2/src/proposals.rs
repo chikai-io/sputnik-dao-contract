@@ -117,6 +117,7 @@ pub enum ProposalKind {
     /// Just a signaling vote, with no execution.
     Vote,
 }
+pub const PROPOSAL_KIND_LEN: usize = 15;
 
 impl ProposalKind {
     /// Returns label of policy for given type of proposal.
@@ -139,107 +140,47 @@ impl ProposalKind {
             ProposalKind::Vote => "vote",
         }
     }
-}
 
-/// Votes recorded in the proposal.
-#[derive(BorshSerialize, BorshDeserialize, Serialize, Deserialize, Clone, Debug)]
-#[serde(crate = "near_sdk::serde")]
-pub enum Vote {
-    Approve = 0x0,
-    Reject = 0x1,
-    Remove = 0x2,
-}
-
-impl From<Action> for Vote {
-    fn from(action: Action) -> Self {
-        match action {
-            Action::VoteApprove => Vote::Approve,
-            Action::VoteReject => Vote::Reject,
-            Action::VoteRemove => Vote::Remove,
-            _ => unreachable!(),
+    pub fn to_index(&self) -> usize {
+        match self {
+            ProposalKind::ChangeConfig { .. } => 0,
+            ProposalKind::ChangePolicy { .. } => 1,
+            ProposalKind::AddRole { .. } => 2,
+            ProposalKind::ChangeRole { .. } => 3,
+            ProposalKind::RemoveRole { .. } => 4,
+            ProposalKind::AddMemberToRole { .. } => 5,
+            ProposalKind::RemoveMemberFromRole { .. } => 6,
+            ProposalKind::FunctionCall { .. } => 7,
+            ProposalKind::UpgradeSelf { .. } => 8,
+            ProposalKind::UpgradeRemote { .. } => 9,
+            ProposalKind::Transfer { .. } => 10,
+            ProposalKind::SetStakingContract { .. } => 11,
+            ProposalKind::AddBounty { .. } => 12,
+            ProposalKind::BountyDone { .. } => 13,
+            ProposalKind::Vote => 14,
         }
     }
-}
 
-/// Represents [`Vote`] capabilities in a single byte.
-#[derive(Clone, Copy, PartialEq)]
-pub struct VoteBitset(pub u8);
-
-impl From<Vote> for VoteBitset {
-    fn from(vote: Vote) -> VoteBitset {
-        let bitset = match vote {
-            Vote::Approve => 0b1 << 0,
-            Vote::Reject => 0b1 << 1,
-            Vote::Remove => 0b1 << 2,
-        };
-        VoteBitset(bitset)
-    }
-}
-
-impl VoteBitset {
-    pub const APPROVE: Self = VoteBitset(0b001);
-    pub const REJECT: Self = VoteBitset(0b010);
-    pub const REMOVE: Self = VoteBitset(0b100);
-    pub const NOTHING: Self = VoteBitset(0b000);
-
-    pub fn can_approve(&self) -> bool {
-        *self & Self::APPROVE == Self::APPROVE
-    }
-
-    pub fn can_reject(&self) -> bool {
-        *self & Self::REJECT == Self::REJECT
-    }
-
-    pub fn can_remove(&self) -> bool {
-        *self & Self::REMOVE == Self::REMOVE
-    }
-
-    pub fn is_nothing(&self) -> bool {
-        *self == Self::NOTHING
-    }
-
-    pub fn from_proposal_action(proposal_action: &str) -> Self {
-        match proposal_action {
-            "VoteApprove" => Self::APPROVE,
-            "VoteReject" => Self::REJECT,
-            "VoteRemove" => Self::REMOVE,
-            "*" => {
-                let mut vote_bitset = Self::NOTHING;
-                vote_bitset |= Self::APPROVE;
-                vote_bitset |= Self::REJECT;
-                vote_bitset |= Self::REMOVE;
-                vote_bitset
-            }
-            _ => Self::NOTHING,
+    pub fn label_to_index(label: &str) -> Option<usize> {
+        match label {
+            "*" => None,
+            "config" => Some(0),
+            "policy" => Some(1),
+            "add_role" => Some(2),
+            "change_role" => Some(3),
+            "remove_role" => Some(4),
+            "add_member_to_role" => Some(5),
+            "remove_member_from_role" => Some(6),
+            "call" => Some(7),
+            "upgrade_self" => Some(8),
+            "upgrade_remote" => Some(9),
+            "transfer" => Some(10),
+            "set_vote_token" => Some(11),
+            "add_bounty" => Some(12),
+            "bounty_done" => Some(13),
+            "vote" => Some(14),
+            _ => env::panic_str("ERR_BAD_PROPOSAL_KIND_LABEL"),
         }
-    }
-}
-
-impl std::ops::BitAnd for VoteBitset {
-    type Output = Self;
-
-    fn bitand(self, rhs: Self) -> Self::Output {
-        Self(self.0 & rhs.0)
-    }
-}
-
-impl std::ops::BitOr for VoteBitset {
-    type Output = Self;
-
-    fn bitor(self, rhs: Self) -> Self::Output {
-        Self(self.0 | rhs.0)
-    }
-}
-
-impl std::ops::BitAndAssign for VoteBitset {
-    fn bitand_assign(&mut self, rhs: Self) {
-        *self = *self & rhs
-    }
-}
-
-impl std::ops::BitOrAssign for VoteBitset {
-    fn bitor_assign(&mut self, rhs: Self) {
-        *self = *self | rhs
     }
 }
 

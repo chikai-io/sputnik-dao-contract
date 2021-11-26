@@ -1,5 +1,4 @@
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
-use near_sdk::env::*;
 use near_sdk::json_types::Base64VecU8;
 use near_sdk::serde::{Deserialize, Serialize};
 use near_sdk::{env, AccountId, Balance, Gas};
@@ -84,6 +83,8 @@ pub(crate) fn upgrade_self(hash: &[u8]) {
         // 1st item in the Tx: "deploy contract" (code is taken from register 0)
         sys::promise_batch_action_deploy_contract(promise_id, u64::MAX as _, 0);
         // 2nd item in the Tx: call this_contract.migrate() with remaining gas
+
+        #[allow(clippy::unnecessary_cast)]
         sys::promise_batch_action_function_call(
             promise_id,
             method_name.len() as _,
@@ -106,6 +107,8 @@ pub(crate) fn upgrade_remote(receiver_id: &AccountId, method_name: &str, hash: &
             receiver_id.as_bytes().as_ptr() as _,
         );
         let attached_gas = env::prepaid_gas() - env::used_gas() - GAS_FOR_UPGRADE_REMOTE_DEPLOY;
+
+        #[allow(clippy::unnecessary_cast)]
         sys::promise_batch_action_function_call(
             promise_id,
             method_name.len() as _,
